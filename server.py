@@ -64,8 +64,7 @@ class GDBSession:
             self.gdb_process.stdin.write(f"{command}\n")
             self.gdb_process.stdin.flush()
             
-            # 결과 읽기 (간단한 구현)
-            # 실제로는 더 정교한 출력 파싱이 필요
+           
             output = ""
             return f"Executed: {command}"
             
@@ -111,143 +110,144 @@ def check_pwndbg_connection() -> str:
         if gdb_session.is_connected:
             return "✓ pwndbg MCP 서버 연결됨 (GDB 세션 활성)"
         else:
-            return "✓ pwndbg 사용 가능 (GDB 세션 비활성)"
+            return "✓ pwndbg 사용 가능 (GDB 세션 비활성, start_debug_session()을 사용해서 세션을 활성화하세요.)"
             
     except Exception as e:
         return f"Error: {e}"
+
+@mcp.tool()
+def start_debug_session(binary_path: str = "") -> str:
+    """GDB 디버깅 세션 시작 (바이너리 경로 선택사항)"""
+    global gdb_session
+    
+    if gdb_session.is_connected:
+        return "이미 GDB 세션이 활성화되어 있습니다. stop_debug_session()을 먼저 실행하세요."
+    
+    try:
+        # GDB 명령어 구성
+        gdb_cmd = ["gdb", "-q"]
+        
+        if binary_path and os.path.exists(binary_path):
+            gdb_cmd.append(binary_path)
+            success_msg = f"✓ GDB 세션 시작됨 (바이너리: {binary_path})"
+        else:
+            success_msg = "✓ GDB 세션 시작됨 (바이너리 없음)"
+        
+        # 기본 설정으로 GDB 시작
+        gdb_cmd.extend([
+            "-ex", "set confirm off",
+            "-ex", "set pagination off",
+        ])
+        
+        gdb_session.gdb_process = subprocess.Popen(
+            gdb_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        
+        gdb_session.is_connected = True
+        return success_msg
+        
+    except Exception as e:
+        return f"GDB 세션 시작 실패: {e}"
+
+@mcp.tool()
+def stop_debug_session() -> str:
+    """GDB 디버깅 세션 종료"""
+    global gdb_session
+    
+    if not gdb_session.is_connected:
+        return "GDB 세션이 활성화되어 있지 않습니다."
+    
+    try:
+        gdb_session.close()
+        return "✓ GDB 세션이 종료되었습니다."
+    except Exception as e:
+        return f"GDB 세션 종료 실패: {e}"
+
+def execute_gdb_command(command: str) -> str:
+    """일반 GDB 명령어 실행"""
+    global gdb_session
+    
+    if not gdb_session.is_connected:
+        return "Error: GDB 세션이 연결되지 않음. start_debug_session()을 먼저 실행하세요."
+    
+    try:
+        # 명령어 전송
+        gdb_session.gdb_process.stdin.write(f"{command}\n")
+        gdb_session.gdb_process.stdin.flush()
+        
+        # 출력 읽기 - 타임아웃 기반으로 수정
+        import time
+        import select
+        
+        output_lines = []
+        start_time = time.time()
+        timeout = 5.0  # 5초 타임아웃
+        
+        while time.time() - start_time < timeout:
+            # select를 사용해서 읽을 데이터가 있는지 확인
+            ready, _, _ = select.select([gdb_session.gdb_process.stdout], [], [], 0.1)
+            
+            if ready:
+                line = gdb_session.gdb_process.stdout.readline()
+                if line:
+                    stripped_line = line.strip()
+                    output_lines.append(stripped_line)
+                    
+                    # GDB 프롬프트가 나타나면 명령어 완료
+                    if "(gdb)" in stripped_line:
+                        break
+                        
+                    # 출력이 너무 길면 제한
+                    if len(output_lines) > 100:
+                        output_lines.append("... (출력이 너무 길어서 생략됨)")
+                        break
+                else:
+                    # EOF 또는 프로세스 종료
+                    break
+            else:
+                # 0.1초 동안 읽을 데이터가 없었다면 잠시 대기
+                if output_lines:  # 이미 출력이 있다면 완료된 것으로 간주
+                    break
+                time.sleep(0.1)
+        
+        # 결과 정리
+        if output_lines:
+            # 마지막 (gdb) 프롬프트 제거
+            if output_lines and "(gdb)" in output_lines[-1]:
+                output_lines.pop()
+            
+            result = "\n".join(output_lines)
+            return result if result.strip() else f"명령어 '{command}' 실행 완료 (출력 없음)"
+        else:
+            return f"명령어 '{command}' 실행됨 (응답 없음)"
+            
+    except Exception as e:
+        return f"명령어 실행 실패: {e}"
+
+@mcp.tool()
+def execute_pwndbg_command(command: str) -> str:
+    """pwndbg 전용 명령어 실행 (heap, bins, checksec 등)"""
+    return execute_gdb_command(command)
 
 def get_python_executable():
     """Python 실행 파일 경로 반환"""
     return sys.executable
 
-def print_mcp_config():
-    """MCP 설정 JSON 출력"""
-    config = {
-        "mcpServers": {
-            mcp.name: {
-                "command": get_python_executable(),
-                "args": [__file__],
-                "timeout": 1800,
-                "disabled": False,
-            }
-        }
-    }
-    print(json.dumps(config, indent=2))
-
-def install_mcp_servers(*, uninstall=False, quiet=False):
-    """MCP 서버를 여러 클라이언트에 설치"""
-    if sys.platform == "win32":
-        # WSL에서 실행되므로 Windows 경로는 제외
-        configs = {}
-    elif sys.platform == "darwin":
-        configs = {
-            "Claude": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Claude"), "claude_desktop_config.json"),
-            "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
-        }
-    elif sys.platform == "linux":
-        configs = {
-            "Cline": (os.path.join(os.path.expanduser("~"), ".config", "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
-            "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
-        }
-    else:
-        print(f"지원하지 않는 플랫폼: {sys.platform}")
-        return
-
-    installed = 0
-    for name, (config_dir, config_file) in configs.items():
-        config_path = os.path.join(config_dir, config_file)
-        
-        if not os.path.exists(config_dir):
-            action = "제거" if uninstall else "설치"
-            if not quiet:
-                print(f"{name} {action} 건너뜀\n  설정: {config_path} (찾을 수 없음)")
-            continue
-            
-        if not os.path.exists(config_path):
-            config = {}
-        else:
-            with open(config_path, "r") as f:
-                data = f.read().strip()
-                if len(data) == 0:
-                    config = {}
-                else:
-                    try:
-                        config = json.loads(data)
-                    except json.JSONDecodeError:
-                        if not quiet:
-                            print(f"{name} 건너뜀\n  설정: {config_path} (잘못된 JSON)")
-                        continue
-        
-        if "mcpServers" not in config:
-            config["mcpServers"] = {}
-        
-        mcp_servers = config["mcpServers"]
-        
-        if uninstall:
-            if mcp.name not in mcp_servers:
-                if not quiet:
-                    print(f"{name} 제거 건너뜀\n  설정: {config_path} (설치되지 않음)")
-                continue
-            del mcp_servers[mcp.name]
-        else:
-            mcp_servers[mcp.name] = {
-                "command": get_python_executable(),
-                "args": [__file__],
-                "timeout": 1800,
-                "disabled": False,
-            }
-        
-        with open(config_path, "w") as f:
-            json.dump(config, f, indent=2)
-        
-        if not quiet:
-            action = "제거됨" if uninstall else "설치됨"
-            print(f"{name} MCP 서버 {action} (재시작 필요)\n  설정: {config_path}")
-        
-        installed += 1
-    
-    if not uninstall and installed == 0:
-        print("설치된 MCP 서버가 없습니다. 지원하지 않는 MCP 클라이언트의 경우 다음 설정을 사용하세요:\n")
-        print_mcp_config()
 
 def main():
     parser = argparse.ArgumentParser(description="pwndbg MCP Server")
-    parser.add_argument("--install", action="store_true", help="MCP 서버 설치")
-    parser.add_argument("--uninstall", action="store_true", help="MCP 서버 제거")
-    parser.add_argument("--config", action="store_true", help="MCP 설정 JSON 생성")
-    parser.add_argument("--transport", type=str, default="stdio", help="MCP 전송 프로토콜 (stdio 또는 http://127.0.0.1:8744)")
+    parser.add_argument("--transport", type=str, default="stdio", help="MCP 전송 프로토콜 (stdio만 지원)")
     
     args = parser.parse_args()
     
-    if args.install and args.uninstall:
-        print("설치와 제거를 동시에 할 수 없습니다")
-        return
-    
-    if args.install:
-        install_mcp_servers()
-        return
-    
-    if args.uninstall:
-        install_mcp_servers(uninstall=True)
-        return
-    
-    if args.config:
-        print_mcp_config()
-        return
-    
+    # MCP 서버 실행
     try:
-        if args.transport == "stdio":
-            mcp.run(transport="stdio")
-        else:
-            from urllib.parse import urlparse
-            url = urlparse(args.transport)
-            if url.hostname is None or url.port is None:
-                raise Exception(f"잘못된 전송 URL: {args.transport}")
-            mcp.settings.host = url.hostname
-            mcp.settings.port = url.port
-            print(f"MCP 서버가 http://{mcp.settings.host}:{mcp.settings.port}/sse 에서 실행 중")
-            mcp.settings.log_level = "INFO"
-            mcp.run(transport="sse")
+        mcp.run()
     except KeyboardInterrupt:
         pass
     finally:
