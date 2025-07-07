@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "pwndbg-mcp-server": {
+      "command": "wsl",
+      "args": [
+        "-e",
+        "python3",
+        "Enter the path where the server.py file is located ex)/home/user/pwndbg-mcp/server.py"
+      ]
+    }
+  }
+}
