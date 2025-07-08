@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
-pwndbg MCP Server - Bridge between AI agents and pwndbg/GDB
-Architecture: AI Agent ←→ MCP Server ←→ GDB Python API ←→ pwndbg
+AI Agent (Claude)
+    ↕ JSON-RPC over stdio
+MCP Server (Python)
+    ↕ subprocess stdin/stdout 
+GDB Process + pwndbg
+    ↕ text commands
+Target Binary
 """
 
 import os
