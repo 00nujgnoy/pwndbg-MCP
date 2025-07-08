@@ -54,23 +54,6 @@ class GDBSession:
             print(f"GDB 시작 실패: {e}")
             return False
     
-    def execute_command(self, command):
-        """GDB 명령어 실행"""
-        if not self.is_connected or not self.gdb_process:
-            return "Error: GDB 세션이 연결되지 않음"
-        
-        try:
-            # 명령어 전송
-            self.gdb_process.stdin.write(f"{command}\n")
-            self.gdb_process.stdin.flush()
-            
-           
-            output = ""
-            return f"Executed: {command}"
-            
-        except Exception as e:
-            return f"Error executing command: {e}"
-    
     def close(self):
         """GDB 세션 종료"""
         if self.gdb_process:
@@ -110,7 +93,7 @@ def check_pwndbg_connection() -> str:
         if gdb_session.is_connected:
             return "✓ pwndbg MCP 서버 연결됨 (GDB 세션 활성)"
         else:
-            return "✓ pwndbg 사용 가능 (GDB 세션 비활성, start_debug_session()을 사용해서 세션을 활성화하세요.)"
+            return "✓ pwndbg 사용 가능 (GDB 세션 비활성)"
             
     except Exception as e:
         return f"Error: {e}"
@@ -168,8 +151,9 @@ def stop_debug_session() -> str:
     except Exception as e:
         return f"GDB 세션 종료 실패: {e}"
 
-def execute_gdb_command(command: str) -> str:
-    """일반 GDB 명령어 실행"""
+@mcp.tool()
+def execute_pwndbg_command(command: str) -> str:
+    """pwndbg 전용 명령어 실행 (heap, bins, checksec 등)"""
     global gdb_session
     
     if not gdb_session.is_connected:
@@ -229,15 +213,9 @@ def execute_gdb_command(command: str) -> str:
     except Exception as e:
         return f"명령어 실행 실패: {e}"
 
-@mcp.tool()
-def execute_pwndbg_command(command: str) -> str:
-    """pwndbg 전용 명령어 실행 (heap, bins, checksec 등)"""
-    return execute_gdb_command(command)
-
 def get_python_executable():
     """Python 실행 파일 경로 반환"""
     return sys.executable
-
 
 def main():
     parser = argparse.ArgumentParser(description="pwndbg MCP Server")
