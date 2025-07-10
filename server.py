@@ -67,7 +67,7 @@ class GDBSession:
             self.is_connected = False
 
 # 전역 GDB 세션
-gdb_session = GDBSession()
+gdb_session
 
 @mcp.tool()
 def check_pwndbg_connection() -> str:
@@ -108,38 +108,30 @@ def start_debug_session(binary_path: str = "") -> str:
     """GDB 디버깅 세션 시작 (바이너리 경로 선택사항)"""
     global gdb_session
     
-    if gdb_session.is_connected:
+    # 이미 세션이 활성화되어 있는지 확인
+    if gdb_session and gdb_session.is_connected:
         return "이미 GDB 세션이 활성화되어 있습니다. stop_debug_session()을 먼저 실행하세요."
     
+    # 바이너리 경로 검증
+    if binary_path and not os.path.exists(binary_path):
+        return f"Error: 바이너리 파일을 찾을 수 없습니다: {binary_path}"
+    
     try:
-        # GDB 명령어 구성
-        gdb_cmd = ["gdb", "-q"]
+        # GDBSession 객체 생성 및 GDB 프로세스 시작
+        gdb_session = GDBSession()
         
-        if binary_path and os.path.exists(binary_path):
-            gdb_cmd.append(binary_path)
-            success_msg = f"✓ GDB 세션 시작됨 (바이너리: {binary_path})"
+        if gdb_session.start_gdb(binary_path):
+            if binary_path:
+                return f"✓ GDB 세션 시작됨 (바이너리: {binary_path})"
+            else:
+                return "✓ GDB 세션 시작됨 (바이너리 없음)"
         else:
-            success_msg = "✓ GDB 세션 시작됨 (바이너리 없음)"
-        
-        # 기본 설정으로 GDB 시작
-        gdb_cmd.extend([
-            "-ex", "set confirm off",
-            "-ex", "set pagination off",
-        ])
-        
-        gdb_session.gdb_process = subprocess.Popen(
-            gdb_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
-        
-        gdb_session.is_connected = True
-        return success_msg
+            gdb_session = None
+            return "GDB 세션 시작 실패"
         
     except Exception as e:
+        # 실패시 gdb_session을 다시 None으로 설정
+        gdb_session = None
         return f"GDB 세션 시작 실패: {e}"
 
 @mcp.tool()
