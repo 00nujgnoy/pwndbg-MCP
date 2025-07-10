@@ -379,9 +379,6 @@ def check_heap_chunks(address: str = "") -> str:
     except Exception as e:
         return f"Heap chunks 분석 실패: {e}"
 
-def get_python_executable():
-    """Python 실행 파일 경로 반환"""
-    return sys.executable
 
 def main():
     parser = argparse.ArgumentParser(description="pwndbg MCP Server")
