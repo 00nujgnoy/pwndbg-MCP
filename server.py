@@ -21,53 +21,9 @@ from mcp.server.fastmcp import FastMCP
 # MCP Server 설정
 mcp = FastMCP("pwndbg-mcp-server", log_level="ERROR")
 
-class GDBSession:
-    """GDB 세션을 관리하는 클래스"""
-    
-    def __init__(self):
-        self.gdb_process = None
-        self.is_connected = False
-        
-    def start_gdb(self, binary_path=None):
-        """GDB 프로세스 시작"""
-        try:
-            # GDB 명령어 구성
-            gdb_cmd = ["gdb", "-q"]  # -q는 quiet 모드
-            
-            if binary_path:
-                gdb_cmd.append(binary_path)
-            
-            # pwndbg가 자동으로 로드되도록 설정
-            gdb_cmd.extend([
-                "-ex", "set confirm off",  # 확인 메시지 비활성화
-                "-ex", "set pagination off",  # 페이지네이션 비활성화
-            ])
-            
-            self.gdb_process = subprocess.Popen(
-                gdb_cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=0
-            )
-            
-            self.is_connected = True
-            return True
-            
-        except Exception as e:
-            print(f"GDB 시작 실패: {e}")
-            return False
-    
-    def close(self):
-        """GDB 세션 종료"""
-        if self.gdb_process:
-            self.gdb_process.terminate()
-            self.gdb_process = None
-            self.is_connected = False
-
-# 전역 GDB 세션
-gdb_session
+# 전역 GDB 세션 변수
+gdb_process = None
+is_connected = False
 
 @mcp.tool()
 def check_pwndbg_connection() -> str:
@@ -95,7 +51,7 @@ def check_pwndbg_connection() -> str:
         if not pwndbg_found:
             return "Warning: pwndbg가 설치되지 않았을 수 있음"
         
-        if gdb_session.is_connected:
+        if is_connected:
             return "✓ pwndbg MCP 서버 연결됨 (GDB 세션 활성)"
         else:
             return "✓ pwndbg 사용 가능 (GDB 세션 비활성)"
@@ -106,10 +62,9 @@ def check_pwndbg_connection() -> str:
 @mcp.tool()
 def start_debug_session(binary_path: str = "") -> str:
     """GDB 디버깅 세션 시작 (바이너리 경로 선택사항)"""
-    global gdb_session
+    global gdb_process, is_connected
     
-    # 이미 세션이 활성화되어 있는지 확인
-    if gdb_session and gdb_session.is_connected:
+    if is_connected:
         return "이미 GDB 세션이 활성화되어 있습니다. stop_debug_session()을 먼저 실행하세요."
     
     # 바이너리 경로 검증
@@ -117,33 +72,52 @@ def start_debug_session(binary_path: str = "") -> str:
         return f"Error: 바이너리 파일을 찾을 수 없습니다: {binary_path}"
     
     try:
-        # GDBSession 객체 생성 및 GDB 프로세스 시작
-        gdb_session = GDBSession()
+        # GDB 명령어 구성
+        gdb_cmd = ["gdb", "-q"]
         
-        if gdb_session.start_gdb(binary_path):
-            if binary_path:
-                return f"✓ GDB 세션 시작됨 (바이너리: {binary_path})"
-            else:
-                return "✓ GDB 세션 시작됨 (바이너리 없음)"
+        if binary_path:
+            gdb_cmd.append(binary_path)
+            success_msg = f"✓ GDB 세션 시작됨 (바이너리: {binary_path})"
         else:
-            gdb_session = None
-            return "GDB 세션 시작 실패"
+            success_msg = "✓ GDB 세션 시작됨 (바이너리 없음)"
+        
+        # 기본 설정으로 GDB 시작
+        gdb_cmd.extend([
+            "-ex", "set confirm off",
+            "-ex", "set pagination off",
+        ])
+        
+        gdb_process = subprocess.Popen(
+            gdb_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        
+        is_connected = True
+        return success_msg
         
     except Exception as e:
-        # 실패시 gdb_session을 다시 None으로 설정
-        gdb_session = None
+        # 실패시 상태 초기화
+        gdb_process = None
+        is_connected = False
         return f"GDB 세션 시작 실패: {e}"
 
 @mcp.tool()
 def stop_debug_session() -> str:
     """GDB 디버깅 세션 종료"""
-    global gdb_session
+    global gdb_process, is_connected
     
-    if not gdb_session.is_connected:
+    if not is_connected:
         return "GDB 세션이 활성화되어 있지 않습니다."
     
     try:
-        gdb_session.close()
+        if gdb_process:
+            gdb_process.terminate()
+        gdb_process = None
+        is_connected = False
         return "✓ GDB 세션이 종료되었습니다."
     except Exception as e:
         return f"GDB 세션 종료 실패: {e}"
@@ -151,15 +125,15 @@ def stop_debug_session() -> str:
 @mcp.tool()
 def execute_pwndbg_command(command: str) -> str:
     """pwndbg 전용 명령어 실행 (heap, bins, checksec 등)"""
-    global gdb_session
+    global gdb_process, is_connected
     
-    if not gdb_session.is_connected:
+    if not is_connected:
         return "Error: GDB 세션이 연결되지 않음. start_debug_session()을 먼저 실행하세요."
     
     try:
         # 명령어 전송
-        gdb_session.gdb_process.stdin.write(f"{command}\n")
-        gdb_session.gdb_process.stdin.flush()
+        gdb_process.stdin.write(f"{command}\n")
+        gdb_process.stdin.flush()
         
         # 출력 읽기 - 타임아웃 기반으로 수정
         import time
@@ -171,10 +145,10 @@ def execute_pwndbg_command(command: str) -> str:
         
         while time.time() - start_time < timeout:
             # select를 사용해서 읽을 데이터가 있는지 확인
-            ready, _, _ = select.select([gdb_session.gdb_process.stdout], [], [], 0.1)
+            ready, _, _ = select.select([gdb_process.stdout], [], [], 0.1)
             
             if ready:
-                line = gdb_session.gdb_process.stdout.readline()
+                line = gdb_process.stdout.readline()
                 if line:
                     stripped_line = line.strip()
                     output_lines.append(stripped_line)
@@ -210,16 +184,12 @@ def execute_pwndbg_command(command: str) -> str:
     except Exception as e:
         return f"명령어 실행 실패: {e}"
 
-def get_python_executable():
-    """Python 실행 파일 경로 반환"""
-    return sys.executable
-
 @mcp.tool()
 def analyze_heap_status() -> str:
     """전체 heap 상태 요약 분석 - heap, arena, malloc_stats 조합"""
-    global gdb_session
+    global is_connected
     
-    if not gdb_session.is_connected:
+    if not is_connected:
         return "Error: GDB 세션이 연결되지 않음. start_debug_session()을 먼저 실행하세요."
     
     try:
@@ -262,9 +232,9 @@ def analyze_heap_status() -> str:
 @mcp.tool()
 def examine_bins() -> str:
     """모든 bin 상태 검사 (fastbin, smallbin, largebin, unsortedbin, tcache)"""
-    global gdb_session
+    global is_connected
     
-    if not gdb_session.is_connected:
+    if not is_connected:
         return "Error: GDB 세션이 연결되지 않음. start_debug_session()을 먼저 실행하세요."
     
     try:
@@ -340,9 +310,9 @@ def examine_bins() -> str:
 @mcp.tool()
 def check_heap_chunks(address: str = "") -> str:
     """특정 주소 또는 전체 heap chunk 상태 확인"""
-    global gdb_session
+    global is_connected
     
-    if not gdb_session.is_connected:
+    if not is_connected:
         return "Error: GDB 세션이 연결되지 않음. start_debug_session()을 먼저 실행하세요."
     
     try:
@@ -409,6 +379,10 @@ def check_heap_chunks(address: str = "") -> str:
     except Exception as e:
         return f"Heap chunks 분석 실패: {e}"
 
+def get_python_executable():
+    """Python 실행 파일 경로 반환"""
+    return sys.executable
+
 def main():
     parser = argparse.ArgumentParser(description="pwndbg MCP Server")
     parser.add_argument("--transport", type=str, default="stdio", help="MCP 전송 프로토콜 (stdio만 지원)")
@@ -422,7 +396,11 @@ def main():
         pass
     finally:
         # 정리 작업
-        gdb_session.close()
+        global gdb_process, is_connected
+        if gdb_process:
+            gdb_process.terminate()
+        gdb_process = None
+        is_connected = False
 
 if __name__ == "__main__":
     main()
