@@ -59,6 +59,7 @@ def _execute_safe_command(command: str) -> str:
         return "Error: GDB 세션이 연결되지 않음. start_debug_session()을 먼저 실행하세요."
     
     try:
+        # 명령어 전송
         gdb_process.stdin.write(f"{command}\n")
         gdb_process.stdin.flush()
         
@@ -67,34 +68,58 @@ def _execute_safe_command(command: str) -> str:
         
         output_lines = []
         start_time = time.time()
-        timeout = 10.0
+        timeout = 5.0
+        buffer = ""
         
         while time.time() - start_time < timeout:
             ready, _, _ = select.select([gdb_process.stdout], [], [], 0.1)
             
             if ready:
-                line = gdb_process.stdout.readline()
-                if line:
-                    stripped_line = line.strip()
-                    output_lines.append(stripped_line)
+                # 바이트 단위로 읽기
+                char = gdb_process.stdout.read(1)
+                if char:
+                    buffer += char
                     
-                    if "(gdb)" in stripped_line:
+                    # 라인 완성 시 처리
+                    if char == '\n':
+                        line = buffer.rstrip('\n\r')
+                        if line:  # 빈 줄 무시
+                            output_lines.append(line)
+                        buffer = ""
+                        
+                        # 프롬프트 감지 (라인 끝에서)
+                        if line.endswith("pwndbg>") :
+                            break
+                    
+                    # 프롬프트 감지 (개행 없는 경우)
+                    elif buffer.endswith("pwndbg>") :
+                        if buffer.strip():
+                            output_lines.append(buffer.rstrip())
                         break
                         
+                    # 출력 제한
                     if len(output_lines) > 200:
-                        output_lines.append("... (출력 제한)")
+                        output_lines.append("... (출력 제한: 200줄)")
                         break
                 else:
+                    # EOF 또는 프로세스 종료
                     break
             else:
-                if output_lines:
-                    break
-                time.sleep(0.1)
+                # 대기 중이지만 출력이 있으면 계속
+                if output_lines and buffer == "":
+                    time.sleep(0.05)  # 짧은 대기 후 종료 판단
+                    ready, _, _ = select.select([gdb_process.stdout], [], [], 0.01)
+                    if not ready:
+                        break
+                else:
+                    time.sleep(0.1)
         
+        # 버퍼에 남은 내용 처리
+        if buffer.strip():
+            output_lines.append(buffer.strip())
+        
+        # 결과 반환
         if output_lines:
-            if output_lines and "(gdb)" in output_lines[-1]:
-                output_lines.pop()
-            
             result = "\n".join(output_lines)
             return result if result.strip() else f"명령어 '{command}' 실행 완료"
         else:
