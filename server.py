@@ -188,6 +188,35 @@ def start_debug_session(binary_path: str = "") -> str:
             bufsize=1
         )
         
+        # 초기화 메시지 읽기 및 프롬프트 대기
+        import time
+        import select
+        
+        start_time = time.time()
+        timeout = 5.0
+        buffer = ""
+        
+        while time.time() - start_time < timeout:
+            ready, _, _ = select.select([gdb_process.stdout], [], [], 0.1)
+            
+            if ready:
+                char = gdb_process.stdout.read(1)
+                if char:
+                    buffer += char
+                    # 프롬프트 감지 (완전한 프롬프트 대기)
+                    if buffer.endswith("pwndbg>") :
+                        break
+                else:
+                    break
+            else:
+                time.sleep(0.1)
+        
+        # 프로세스 상태 확인
+        if gdb_process.poll() is not None:
+            gdb_process = None
+            is_connected = False
+            return "Error: GDB 프로세스가 예기치 않게 종료되었습니다."
+        
         is_connected = True
         return success_msg
         
